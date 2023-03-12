@@ -576,11 +576,17 @@ void function_info::print_basic_block_links() {
     printf("\n");
   }
 }
+
+/*
+找到 break 指令跳转到的目标基本块。
+*/
 operand_info *function_info::find_break_target(
     ptx_instruction *p_break_insn)  // find the target of a break instruction
 {
+  //break_bb指向的是 break 指令所在的基本块。
   const basic_block_t *break_bb = p_break_insn->get_bb();
   // go through the dominator tree
+  //遍历必经结点树。
   for (const basic_block_t *p_bb = break_bb; p_bb->immediatedominator_id != -1;
        p_bb = m_basic_blocks[p_bb->immediatedominator_id]) {
     // reverse search through instructions in basic block for breakaddr
@@ -691,6 +697,11 @@ void function_info::connect_basic_blocks()  // iterate across m_basic_blocks of
   }
 }
 
+/*
+在该函数执行之前，已经执行过[基本块连接任务-connect_basic_blocks()]，但是这时候仅仅是按照每个基本块的
+前后顺序进行了连接，没有针对 break 指令的跳转目标进行连接。因此下面的函数是分析PTX代码中的所有 break 
+指令，并依据他们的跳转目标、或者是否是预测跳转来进行基本块连接上的修改。
+*/
 bool function_info::connect_break_targets()  // connecting break instructions
                                              // with proper targets
 {
@@ -700,19 +711,25 @@ bool function_info::connect_break_targets()  // connecting break instructions
   bool modified = false;
 
   // start from first basic block, which we know is the entry point
+  //从第一个基本块开始，第一个基本块是函数的入口。
   bb_itr = m_basic_blocks.begin();
   for (bb_itr = m_basic_blocks.begin(); bb_itr != m_basic_blocks.end();
        bb_itr++) {
     basic_block_t *p_bb = *bb_itr;
-    //基本块的末尾指令。
+    //pI指向的是基本块的最末尾指令。
     ptx_instruction *pI = p_bb->ptx_end;
+    //如果p_bb指向的是最后一个基本块，即函数的出口的话，就没有后继结点需要连接到它。
     if (p_bb->is_exit)  // reached last basic block, no successors to link
       continue;
+    //对操作码为 break 的指令进行处理。
     if (pI->get_opcode() == BREAK_OP) {
       // backup existing successor_ids for stability check
+      //备份现有的successor_id以进行稳定性检查，orig_successor_ids指向的是现有的successor_id，即后
+      //继结点的编号。
       std::set<int> orig_successor_ids = p_bb->successor_ids;
 
       // erase the previous linkage with old successors
+      //删除之前执行[基本块连接任务-connect_basic_blocks()]时，p_bb与后继结点的链接。
       for (std::set<int>::iterator succ_ids = p_bb->successor_ids.begin();
            succ_ids != p_bb->successor_ids.end(); ++succ_ids) {
         basic_block_t *successor_bb = m_basic_blocks[*succ_ids];
@@ -722,6 +739,7 @@ bool function_info::connect_break_targets()  // connecting break instructions
 
       // find successor and link that basic_block to this one
       // successor of a break is set by an preceeding breakaddr instruction
+      //找到后继结点，并将该 basic_block 链接到 p_bb。
       operand_info *target = find_break_target(pI);
       unsigned addr = labels[target->name()];
       ptx_instruction *target_pI = m_instr_mem[addr];
@@ -729,6 +747,9 @@ bool function_info::connect_break_targets()  // connecting break instructions
       p_bb->successor_ids.insert(target_bb->bb_id);
       target_bb->predecessor_ids.insert(p_bb->bb_id);
 
+      //如果pI指向的PTX指令有谓词，则属于预测跳转。一方面，前面已经将其所在基本块与跳转到的目标基本块
+      //进行连接，这是在预测成功的条件下；另一方面，如果预测失败，则仍旧沿着顺序基本块执行，因此还需要
+      //将其与顺序下一个基本块进行连接。
       if (pI->has_pred()) {
         // predicated break - add link to next basic block
         unsigned next_addr = pI->get_m_instr_mem_index() + pI->inst_size();
@@ -737,6 +758,7 @@ bool function_info::connect_break_targets()  // connecting break instructions
         next_bb->predecessor_ids.insert(p_bb->bb_id);
       }
 
+      //返回是否由于 break 指令的存在，对基本块之间的连接进行了修改。
       modified = modified || (orig_successor_ids != p_bb->successor_ids);
     }
   }
@@ -758,7 +780,10 @@ void function_info::do_pdom() {
     find_dominators();
     //寻找一个函数的完整PTX指令中，每一个（基本块）结点的直接必经结点（immediate dominators）。
     find_idominators();
-    //
+    //在该函数执行之前，已经执行过[基本块连接任务-connect_basic_blocks()]，但是这时候仅仅是按照每个
+    //基本块的前后顺序进行了连接，没有针对 break 指令的跳转目标进行连接。因此下面的函数是分析PTX代码
+    //中的所有 break 指令，并依据他们的跳转目标、或者是否是预测跳转来进行基本块连接上的修改。modified 
+    //返回的是：是否由于 break 指令的存在，对基本块之间的连接进行了修改。
     modified = connect_break_targets();
   } while (modified == true);
 
@@ -780,7 +805,7 @@ void function_info::do_pdom() {
   }
   printf("GPGPU-Sim PTX: pre-decoding instructions for \'%s\'...\n",
          m_name.c_str());
-  //对m_instr_mem中的每一条指令进行预处理。
+  //对m_instr_mem中的每一条指令进行预解码。
   for (unsigned ii = 0; ii < m_n;
        ii += m_instr_mem[ii]->inst_size()) {  // handle branch instructions
     ptx_instruction *pI = m_instr_mem[ii];
