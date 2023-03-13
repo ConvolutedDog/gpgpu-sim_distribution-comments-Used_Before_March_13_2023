@@ -1913,6 +1913,7 @@ void mapping(int thread, int wmma_type, int wmma_layout, int type, int index,
 void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
   int i, j, k, thrd;
   int row, col, offset;
+  //A、B、C、D矩阵，完成 D=A*B+C 操作。
   ptx_reg_t matrix_a[16][16];
   ptx_reg_t matrix_b[16][16];
   ptx_reg_t matrix_c[16][16];
