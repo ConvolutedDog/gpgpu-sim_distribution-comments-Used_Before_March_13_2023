@@ -1920,17 +1920,21 @@ void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
   ptx_reg_t matrix_d[16][16];
   ptx_reg_t src_data;
   ptx_thread_info *thread;
-
+  //pI->get_wmma_layout 函数获取 wmma 指令的 A、B 两个矩阵的layout，index为 0 时为 A 矩阵，index为1
+  //时为 B 矩阵。
   unsigned a_layout = pI->get_wmma_layout(0);
   unsigned b_layout = pI->get_wmma_layout(1);
+  //
   unsigned type = pI->get_type();
   unsigned type2 = pI->get_type2();
   int tid;
+  //operand_lookup(n)功能为传入参数 n，返回操作数列表 m_operands 中的第 n 个操作数。
   const operand_info &dst = pI->operand_lookup(0);
 
-  if (core->get_gpu()->is_functional_sim())
+  if (core->get_gpu()->is_functional_sim()){
+    printf("mma_impl: inst.warp_id_func()=%d, tid=%d\n", core->get_warp_size(), tid);
     tid = inst.warp_id_func() * core->get_warp_size();
-  else
+  }else
     tid = inst.warp_id() * core->get_warp_size();
   float temp;
   half temp2;
