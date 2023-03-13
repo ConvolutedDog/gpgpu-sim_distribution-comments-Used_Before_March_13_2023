@@ -308,7 +308,7 @@ function_info::ptx_assemble()。这个函数做了以下工作：
 4. 进行控制流分析
 5. 预先对每条指令进行解码（以加快仿真速度）
 该函数做了很多事情，包括将指令放入m_instr_mem指令存储、创建PC到指令的映射s_g_pc_to_insn、通过搜索
-后支配者分析基本块信息、分支/分歧信息、计算目标PC的分支指令等。
+后必经结点分析基本块信息、分支/分歧信息、计算目标PC的分支指令等。
 */
 void function_info::ptx_assemble() {
   //m_assembled是一个布尔类型的变量，用于表示GPGPU-Sim内核是否已经完成编译和装配。如果内核已经完成
@@ -686,7 +686,7 @@ void gpgpu_t::memcpy_to_gpu(size_t dst_start_addr, const void *src,
 
   // Copy into the performance model.
   // extern gpgpu_sim* g_the_gpu;
-  //将参数拷贝到性能模型中。
+  //将数据拷贝到性能模型中。
   gpgpu_ctx->the_gpgpusim->g_the_gpu->perf_memcpy_to_gpu(dst_start_addr, count);
   if (g_debug_execution >= 3) {
     printf(" done.\n");
@@ -710,7 +710,7 @@ void gpgpu_t::memcpy_from_gpu(void *dst, size_t src_start_addr, size_t count) {
 
   // Copy into the performance model.
   // extern gpgpu_sim* g_the_gpu;
-  //将参数拷贝到性能模型中。
+  //将数据拷贝到性能模型中。
   gpgpu_ctx->the_gpgpusim->g_the_gpu->perf_memcpy_to_gpu(src_start_addr, count);
   if (g_debug_execution >= 3) {
     printf(" done.\n");
@@ -2738,12 +2738,28 @@ const warp_inst_t *gpgpu_context::ptx_fetch_inst(address_type pc) {
 执行指令简单地从使用函数 ptx_sim_init_thread 初始化标量线程开始，然后使用上面的 ptx_exec_inst() 在
 warp中执行标量线程。即每个线程的功能状态通过调用 ptx_sim_init_thread 进行初始化。这里的函数仅是对单
 个线程的指令进行初始化的，参数中包括指定某个线程的 unsigned hw_cta_id, unsigned hw_warp_id, 以及
-ptx_thread_info **thread_info, int sid, unsigned tid。
+ptx_thread_info **thread_info, int sid, unsigned tid。需要注意的是，这类进行的是单个CTA内的所有
+线程进行循环。
 
 共享内存空间是整个CTA（线程块）所共有的，当每个CTA被分派执行时（在函数 ptx_sim_init_thread() 中），
 为其分配一个唯一的 memory_space 对象。当CTA执行完毕后，该对象被取消分配。
 
 ptx_sim_init_thread 在 functionalCoreSim::initializeCTA 函数中被调用，参数的详细说明见该调用处。
+
+函数定义：ptx_sim_init_thread(kernel_info_t &kernel,
+                                ptx_thread_info **thread_info, int sid,
+                                unsigned tid, unsigned threads_left,
+                                unsigned num_threads, core_t *core,
+                                unsigned hw_cta_id, unsigned hw_warp_id,
+                                gpgpu_t *gpu, bool isInFunctionalSimulationMode)
+参数：
+  sid=0：SM的index，由于这里执行功能模拟，因此SM的index不重要，可以完全将所有需要执行的线程全部放到
+        第0号SM上。
+  tid=i：线程的index，在这个循环里将所有需要执行的线程全部放到第0号SM上，则线程的index即为循环变量i。
+  threads_left=m_kernel->threads_per_cta()-i：在当前线程之后剩余线程的数量。
+  num_threads=m_kernel->threads_per_cta()。
+  hw_cta_id=0：由于这里执行功能模拟，因此CTA的index不重要，硬件CTA的index可以始终为0。
+  hw_warp_id=i/m_warp_size：由于全都在一个CTA内，硬件的warp的index即为i/m_warp_size。
 */
 unsigned ptx_sim_init_thread(kernel_info_t &kernel,
                              ptx_thread_info **thread_info, int sid,
@@ -2751,7 +2767,7 @@ unsigned ptx_sim_init_thread(kernel_info_t &kernel,
                              unsigned num_threads, core_t *core,
                              unsigned hw_cta_id, unsigned hw_warp_id,
                              gpgpu_t *gpu, bool isInFunctionalSimulationMode) {
-  //根据给定的内核信息kernel，获取该内核中的活跃线程。
+  //根据给定的内核信息kernel，获取该内核中的活跃线程，返回的是一个活跃线程列表。
   std::list<ptx_thread_info *> &active_threads = kernel.active_threads();
   
   //内存空间是由下列查找表来管理的。
@@ -2786,13 +2802,14 @@ unsigned ptx_sim_init_thread(kernel_info_t &kernel,
   //ptx_thread_info对象包含单个标量线程（OpenCL中的work item）的功能仿真状态。这包括以下内容：
   //  a. 寄存器值存储
   //  b. 本地内存存储（OpenCL中的私有内存）
-  //  c. 共享内存存储（OpenCL中的本地内存）。注意，同一线程块/Work Wrap的所有标量线程都
-  //  d. 会访问相同的共享内存存储。
+  //  c. 共享内存存储（OpenCL中的本地内存）。注意，同一线程块/Work Wrap的所有标量线程都会访问相同的
+  //     共享内存存储。
   //  e. 程序计数器（PC）
   //  f. 调用堆栈
   //  g. 线程ID（网格启动中的软件ID，以及表明它在时序模型中占据哪个硬件线程槽的硬件ID)
   if (!active_threads.empty()) {
     assert(active_threads.size() <= threads_left);
+    //从活跃线程队列中弹出一个。
     ptx_thread_info *thd = active_threads.front();
     active_threads.pop_front();
     *thread_info = thd;
@@ -3283,7 +3300,7 @@ void cuda_sim::gpgpu_cuda_ptx_sim_main_func(kernel_info_t &kernel,
   // before we execute, we should do PDOM analysis for functional simulation
   // scenario.
   //将Shader Core对象用于book keeping是不需要的，但由于大多数为性能模拟而构建的函数都需要它，所以我们
-  //在这里使用它extern gpgpu_sim* g_the_gpu；在执行之前，应该对功能模拟场景进行PDOM（后支配者）分析。
+  //在这里使用它extern gpgpu_sim* g_the_gpu；在执行之前，应该对功能模拟场景进行PDOM（后必经结点）分析。
   
   //kernel_func_info 指向 kernel 的入口。
   function_info *kernel_func_info = kernel.entry();
@@ -3302,12 +3319,12 @@ void cuda_sim::gpgpu_cuda_ptx_sim_main_func(kernel_info_t &kernel,
   checkpoint *g_checkpoint;
   g_checkpoint = new checkpoint();
 
-  //如果内核函数已经将PDOM（分支处理中的后支配者检测）检测完成，执行if块代码。
+  //如果内核函数已经将PDOM（分支处理中的后必经结点检测）检测完成，执行if块代码。
   if (kernel_func_info->is_pdom_set()) {
     printf("GPGPU-Sim PTX: PDOM analysis already done for %s \n",
            kernel.name().c_str());
   } else {
-    //内核函数尚未将PDOM（分支处理中的后支配者检测）检测完成。
+    //内核函数尚未将PDOM（分支处理中的后必经结点检测）检测完成。
     printf("GPGPU-Sim PTX: finding reconvergence points for \'%s\'...\n",
            kernel.name().c_str());
     //执行PDOM检测。 
@@ -3454,16 +3471,19 @@ void cuda_sim::gpgpu_cuda_ptx_sim_main_func(kernel_info_t &kernel,
 执行CTA的初始化。
 */
 void functionalCoreSim::initializeCTA(unsigned ctaid_cp) {
+  //CTA内活跃线程的数量。
   int ctaLiveThreads = 0;
+  //m_kernel->entry() 返回m_kernel的入口函数，m_kernel_entry是 function_info 对象。
   symbol_table *symtab = m_kernel->entry()->get_symtab();
 
-  //m_warp_count是一个CTA中的warp总数。
+  //m_warp_count是一个CTA中的warp总数。每一个warp维护一个m_warpAtBarrier/m_liveThreadCount变量。
   for (int i = 0; i < m_warp_count; i++) {
     m_warpAtBarrier[i] = false;
     m_liveThreadCount[i] = 0;
   }
 
-  //将所有的线程置空，以后续执行初始化。m_warp_count是一个CTA中的warp总数。
+  //将所有的线程置空，以后续执行初始化。m_warp_count是一个CTA中的warp总数。m_warp_size是单个warp内
+  //有多少线程。
   for (int i = 0; i < m_warp_count * m_warp_size; i++) m_thread[i] = NULL;
 
   // get threads for a cta
@@ -3499,7 +3519,23 @@ void functionalCoreSim::initializeCTA(unsigned ctaid_cp) {
   //       编号为：i/m_warp_size。
   //    10.gpgpu_t *gpu：class gpgpu_t是实现GPU功能模拟器的顶层类。
   //    11.bool isInFunctionalSimulationMode：所有模拟包括功能/性能模拟都要求功能模拟为真。
+
+  //对当前CTA内部的所有线程进行循环。
   for (unsigned i = 0; i < m_kernel->threads_per_cta(); i++) {
+    //函数定义：ptx_sim_init_thread(kernel_info_t &kernel,
+    //                             ptx_thread_info **thread_info, int sid,
+    //                             unsigned tid, unsigned threads_left,
+    //                             unsigned num_threads, core_t *core,
+    //                             unsigned hw_cta_id, unsigned hw_warp_id,
+    //                             gpgpu_t *gpu, bool isInFunctionalSimulationMode)
+    //参数：
+    //    sid=0：SM的index，由于这里执行功能模拟，因此SM的index不重要，可以完全将所有需要执行的线程全部放到
+    //           第0号SM上。
+    //    tid=i：线程的index，在这个循环里将所有需要执行的线程全部放到第0号SM上，则线程的index即为循环变量i。
+    //    threads_left=m_kernel->threads_per_cta()-i：在当前线程之后剩余线程的数量。
+    //    num_threads=m_kernel->threads_per_cta()。
+    //    hw_cta_id=0：由于这里执行功能模拟，因此CTA的index不重要，硬件CTA的index可以始终为0。
+    //    hw_warp_id=i/m_warp_size：由于全都在一个CTA内，硬件的warp的index即为i/m_warp_size。
     ptx_sim_init_thread(*m_kernel, &m_thread[i], 0, i,
                         m_kernel->threads_per_cta() - i,
                         m_kernel->threads_per_cta(), this, 0, i / m_warp_size,
