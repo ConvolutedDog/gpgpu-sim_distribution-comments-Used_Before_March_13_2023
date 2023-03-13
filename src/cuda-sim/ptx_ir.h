@@ -1247,9 +1247,11 @@ class ptx_instruction : public warp_inst_t {
   //数链接在一起，但针对不同的链接兼容SM体系结构编译，则使用一个函数中的wmma操作返回的片段作为不同函数
   //中wmma操作的操作数可能无法按预期工作。注意，将wmma片段传递给具有弱链接的函数是不安全的，因为在链接
   //时对此类函数的引用可能会解析为不同编译模块中的函数。
+  //获取 wmma 指令的 A、B 两个矩阵的layout，index为 0 时为 A 矩阵，index为 1 时为 B 矩阵。
   int get_wmma_layout(int index) const {
     return m_wmma_layout[index];  // 0->Matrix D,1->Matrix C
   }
+  //
   int get_type() const {
     assert(!m_scalar_type.empty());
     return m_scalar_type.front();
