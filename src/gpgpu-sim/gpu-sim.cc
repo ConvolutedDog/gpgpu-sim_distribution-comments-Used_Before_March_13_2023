@@ -142,7 +142,8 @@ void power_config::reg_options(class OptionParser *opp) {
 受一个OptionParser指针作为参数，用于将存储模型参数添加到OptionParser实例中。
 */
 void memory_config::reg_options(class OptionParser *opp) {
-  //???
+  //cuda-sim.cc中已经实现了功能性的 memcpy_to_gpu() 函数，这里的 m_perf_sim_memcpy 标志是否执行
+  //性能模型中的 perf_memcpy_to_gpu()函数，即功能相同，把数据拷贝到GPU的显存。
   option_parser_register(opp, "-gpgpu_perf_sim_memcpy", OPT_BOOL,
                          &m_perf_sim_memcpy, "Fill the L2 cache on memcpy",
                          "1");
@@ -167,13 +168,14 @@ void memory_config::reg_options(class OptionParser *opp) {
   //貌似没有调用过，后面用到再补充。非常理想的l2_cache，总是访存命中。
   option_parser_register(opp, "-l2_ideal", OPT_BOOL, &l2_ideal,
                          "Use a ideal L2 cache that always hit", "0");
-  //???
+  //统一的分Bank的 L2 数据缓存的配置。???
   option_parser_register(opp, "-gpgpu_cache:dl2", OPT_CSTR,
                          &m_L2_config.m_config_string,
                          "unified banked L2 data cache config "
                          " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_"
                          "alloc>,<mshr>:<N>:<merge>,<mq>}",
                          "64:128:8,L:B:m:N,A:16:4,4");
+  //是否将 L2 数据缓存仅用于 texture。
   option_parser_register(opp, "-gpgpu_cache:dl2_texture_only", OPT_BOOL,
                          &m_L2_texure_only, "L2 cache used for texture only",
                          "1");
@@ -274,11 +276,11 @@ void memory_config::reg_options(class OptionParser *opp) {
 注册每个Shader Core（SM）的参数设置。
 */
 void shader_core_config::reg_options(class OptionParser *opp) {
-  //SIMT堆栈处理分支的模式，1代表采用后支配者模式，其他暂不支持。
+  //SIMT堆栈处理分支的模式，1代表采用后必经结点模式，其他暂不支持。
   //传统的SIMT Stack（PDOM机制）在线程束分化后采用了一种“unified”机制，令所有分化的线程束“统一地”在
   //条件跳转指令的“immediate post-dominator”处（即IPDOM处）进行汇聚（reconverge）。根据“y is post-
   //dominator of x”的定义：所有路径经由x点则必经由y点，以此可以确保在x点分化出去的所有线程必经过y点；
-  //并且“immediate post-dominator”的定义又保证了y点是最早可以汇聚到所有分化线程的点，越早的汇聚则意
+  //并且“immediate post-dominator”的定义又保证了y点是最早可以汇聚到所有分支线程的点，越早的汇聚则意
   //味着SIMD流水线可以越早地被更充分地利用。
   option_parser_register(opp, "-gpgpu_simd_model", OPT_INT32, &model,
                          "1 = post-dominator", "1");
@@ -288,6 +290,7 @@ void shader_core_config::reg_options(class OptionParser *opp) {
       opp, "-gpgpu_shader_core_pipeline", OPT_CSTR,
       &gpgpu_shader_core_pipeline_opt,
       "shader core pipeline config, i.e., {<nthread>:<warpsize>}", "1024:32");
+  //L1 texture cache的配置，后面用到再补充。
   option_parser_register(opp, "-gpgpu_tex_cache:l1", OPT_CSTR,
                          &m_L1T_config.m_config_string,
                          "per-shader L1 texture cache  (READ-ONLY) config "
@@ -321,19 +324,21 @@ void shader_core_config::reg_options(class OptionParser *opp) {
       " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_alloc>,<mshr>:<N>:<"
       "merge>,<mq>} ",
       "64:64:2,L:R:f:N,A:2:32,4");
-  
+  //L1 instruction cache的配置。
   option_parser_register(opp, "-gpgpu_cache:il1", OPT_CSTR,
                          &m_L1I_config.m_config_string,
                          "shader L1 instruction cache config "
                          " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_"
                          "alloc>,<mshr>:<N>:<merge>,<mq>} ",
                          "4:256:4,L:R:f:N,A:2:32,4");
+  //L1 data cache的配置。
   option_parser_register(opp, "-gpgpu_cache:dl1", OPT_CSTR,
                          &m_L1D_config.m_config_string,
                          "per-shader L1 data cache config "
                          " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_"
                          "alloc>,<mshr>:<N>:<merge>,<mq> | none}",
                          "none");
+  //L1 cache的bank数。例如 Volta unified cache 有 4 个banks。
   option_parser_register(opp, "-gpgpu_l1_banks", OPT_UINT32,
                          &m_L1D_config.l1_banks, "The number of L1 cache banks",
                          "1");
@@ -2332,6 +2337,10 @@ void shader_core_ctx::dump_warp_state(FILE *fout) const {
     m_warp[w]->print(fout);
 }
 
+/*
+cuda-sim.cc中已经实现了功能性的 memcpy_to_gpu() 函数，这里实现的是性能模型中的 perf_memcpy_to_gpu()
+函数，即功能相同，把数据拷贝到GPU的显存。
+*/
 void gpgpu_sim::perf_memcpy_to_gpu(size_t dst_start_addr, size_t count) {
   if (m_memory_config->m_perf_sim_memcpy) {
     //if(!m_config.trace_driven_mode)    
