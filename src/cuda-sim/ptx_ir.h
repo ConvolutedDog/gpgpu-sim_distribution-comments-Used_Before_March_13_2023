@@ -1241,8 +1241,12 @@ class ptx_instruction : public warp_inst_t {
 
   //
   int get_wmma_type() const { return m_wmma_type; }
-  //warp中的每一个线程都持有矩阵的一部分。warp中线程加载的碎片的分布是未指定的，并且依赖于目标体系结构，
-  //因此矩阵中碎片的身份也是未指定的并且依赖于对象体系结构。如果基础矩阵的形状、布局和元素类型匹配，则wmma操作返回的片段可以用作另一个wmma操作的操作数。由于片段布局依赖于体系结构，如果两个函数链接在一起，但针对不同的链接兼容SM体系结构编译，则使用一个函数中的wmma操作返回的片段作为不同函数中wmma操作的操作数可能无法按预期工作。注意，将wmma片段传递给具有弱链接的函数是不安全的，因为在链接时对此类函数的引用可能会解析为不同编译模块中的函数。
+  //warp中的每一个线程都持有矩阵的一部分。warp中线程加载的fragment的分布是未指定的，并且依赖于目标体系
+  //结构，因此矩阵中fragment的身份也是未指定的并且依赖于对象体系结构。如果基础矩阵的形状、布局和元素类
+  //型匹配，则wmma操作返回的片段可以用作另一个wmma操作的操作数。由于片段布局依赖于体系结构，如果两个函
+  //数链接在一起，但针对不同的链接兼容SM体系结构编译，则使用一个函数中的wmma操作返回的片段作为不同函数
+  //中wmma操作的操作数可能无法按预期工作。注意，将wmma片段传递给具有弱链接的函数是不安全的，因为在链接
+  //时对此类函数的引用可能会解析为不同编译模块中的函数。
   int get_wmma_layout(int index) const {
     return m_wmma_layout[index];  // 0->Matrix D,1->Matrix C
   }
@@ -1621,6 +1625,7 @@ class function_info {
     // THIS DEPENDS ON ptxas being called after the PTX is parsed.
     m_kernel_info.maxthreads = maxnt_id;
   }
+  //
   symbol_table *get_symtab() { return m_symtab; }
 
   unsigned local_mem_framesize() const { return m_local_mem_framesize; }
